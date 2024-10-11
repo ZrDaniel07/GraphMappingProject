@@ -9,21 +9,18 @@ async def map_graph(websocket_url):
         print(f"Mensagem recebida: {message}")
 
         # Analisa a mensagem para extrair o ID do vértice atual e os adjacentes
-        # Formato esperado: "Vértice atual: [vertex_id], Adjacentes: ['1', '2', '3']"
         try:
-            # Divide a mensagem em partes usando a vírgula
-            parts = message.split(',')
+            # Divide a mensagem em 'Vértice atual: X' e 'Adjacentes: [...]'
+            vertex_part, adjacents_part = message.split(', Adjacentes:')
             # Extrai o ID do vértice atual
-            vertex_part = parts[0].strip()
             current_vertex_id = int(vertex_part.split(':')[1].strip())
-            # Extrai os adjacentes
-            adjacents_part = parts[1].strip()
-            adjacents_str = adjacents_part.split(':')[1].strip()
-            # Remove colchetes e aspas, se houver
-            if adjacents_str.startswith('[') and adjacents_str.endswith(']'):
-                adjacents_str = adjacents_str[1:-1]
-            # Converte a lista de adjacentes em inteiros
-            adjacent_vertices = [int(v.strip().strip("'")) for v in adjacents_str.split(',') if v.strip()]
+            # Extrai a string dos adjacentes
+            adjacents_str = adjacents_part.strip()
+            # Remove colchetes e aspas
+            adjacents_str = adjacents_str.strip("[]")
+            adjacents_list = adjacents_str.split(',')
+            # Converte os adjacentes para inteiros
+            adjacent_vertices = [int(v.strip().strip("'").strip('"')) for v in adjacents_list if v.strip()]
         except Exception as e:
             print(f"Erro ao analisar a mensagem inicial: {e}")
             return
@@ -57,19 +54,17 @@ async def map_graph(websocket_url):
 
             # Analisa a mensagem para extrair o ID do vértice atual e os adjacentes
             try:
-                # Divide a mensagem em partes usando a vírgula
-                parts = message.split(',')
+                # Divide a mensagem em 'Vértice atual: X' e 'Adjacentes: [...]'
+                vertex_part, adjacents_part = message.split(', Adjacentes:')
                 # Extrai o ID do vértice atual
-                vertex_part = parts[0].strip()
                 current_vertex_id = int(vertex_part.split(':')[1].strip())
-                # Extrai os adjacentes
-                adjacents_part = parts[1].strip()
-                adjacents_str = adjacents_part.split(':')[1].strip()
-                # Remove colchetes e aspas, se houver
-                if adjacents_str.startswith('[') and adjacents_str.endswith(']'):
-                    adjacents_str = adjacents_str[1:-1]
-                # Converte a lista de adjacentes em inteiros
-                adjacent_vertices = [int(v.strip().strip("'")) for v in adjacents_str.split(',') if v.strip()]
+                # Extrai a string dos adjacentes
+                adjacents_str = adjacents_part.strip()
+                # Remove colchetes e aspas
+                adjacents_str = adjacents_str.strip("[]")
+                adjacents_list = adjacents_str.split(',')
+                # Converte os adjacentes para inteiros
+                adjacent_vertices = [int(v.strip().strip("'").strip('"')) for v in adjacents_list if v.strip()]
             except Exception as e:
                 print(f"Erro ao analisar a mensagem: {e}")
                 continue  # Em caso de erro, continua para o próximo vértice
