@@ -69,10 +69,3 @@ Você pode testar a comunicação com o WebSocket usando ferramentas como o Post
 2. **Busca Múltipla**: Utiliza uma fila de prioridade para realizar a busca do melhor caminho (similar ao algoritmo de Dijkstra) e armazena todos os caminhos encontrados.
 3. **Armazenamento em Banco de Dados**: Todos os caminhos são armazenados em um banco de dados SQLite (`results.db`) para análise posterior.
 4. **Exibição dos Resultados**: Ao final, os caminhos encontrados são exibidos no console.
-
-## Exemplos de Comandos Úteis
-
-- **Adicionar novas dependências**:
-  ```sh
-  pip freeze > requirements.txt
-  ```
