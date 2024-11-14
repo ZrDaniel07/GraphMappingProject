@@ -1,10 +1,10 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from typing import Optional, List
 from uuid import UUID
 import uuid
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, UUID as SQLUUID
+import asyncio
+from sqlalchemy import create_engine, Column, Integer, Float, String, ForeignKey, UUID as SQLUUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 from sqlalchemy.schema import PrimaryKeyConstraint
@@ -12,23 +12,41 @@ from sqlalchemy.schema import PrimaryKeyConstraint
 Base = declarative_base()
 
 # SQLAlchemy models
+class Aresta(Base):
+    __tablename__ = 'arestas'
+
+    vertice_origem_id = Column(Integer, ForeignKey('vertices.id'), nullable=False)
+    vertice_destino_id = Column(Integer, ForeignKey('vertices.id'), nullable=False)
+    peso = Column(Integer, nullable=False)
+    labirinto_id = Column(Integer, ForeignKey('labirintos.id'),nullable=False)
+
+    # Definindo a chave primária composta
+    __table_args__ = (PrimaryKeyConstraint('vertice_origem_id', 'vertice_destino_id', 'labirinto_id', name='pk_aresta'),)
+
+    # Relacionamentos
+    vertice_origem = relationship("Vertice", foreign_keys=[vertice_origem_id])
+    vertice_destino = relationship("Vertice", foreign_keys=[vertice_destino_id])
+
+    def __repr__(self):
+        return f"<Aresta(origem={self.vertice_origem_id}, destino={self.vertice_destino_id}, peso={self.peso})>"
+
 class Vertice(Base):
     __tablename__ = 'vertices'
 
-    id = Column(Integer, nullable=False)  # ID for the vertex within a specific labyrinth/graph
-    labirinto_id = Column(Integer, ForeignKey('labirintos.id'), nullable=False)  # Reference to the labyrinth/graph
-    adjacentes = Column(String)  # Assuming adjacent vertices are stored as a comma-separated string
-    tipo = Column(Integer)  # Defining behavior of the vertex | 0 = Normal, 1 = Entrada, 2 = Saida
+    id = Column(Integer, nullable=False)
+    labirinto_id = Column(Integer, ForeignKey('labirintos.id'), nullable=False)
+    tipo = Column(Integer)
 
-    # Relationships
     labirinto = relationship("Labirinto", back_populates="vertices")
+    
+    # Relacionamento com a tabela Aresta para definir as adjacências
+    arestas_origem = relationship("Aresta", foreign_keys=[Aresta.vertice_origem_id], back_populates="vertice_origem")
+    arestas_destino = relationship("Aresta", foreign_keys=[Aresta.vertice_destino_id], back_populates="vertice_destino")
 
-    # Composite Primary Key (id, labirinto_id)
     __table_args__ = (PrimaryKeyConstraint('id', 'labirinto_id', name='pk_vertice'),)
 
     def __repr__(self):
         return f"<Vertice(id={self.id}, labirinto_id={self.labirinto_id})>"
-
 
 class Labirinto(Base):
     __tablename__ = 'labirintos'
@@ -38,51 +56,68 @@ class Labirinto(Base):
     entrada = Column(Integer)
     dificuldade = Column(String)
 
+    info_grupos = relationship("InfoGrupo", back_populates="labirinto")
+
     def __repr__(self):
         return f"<Labirinto(id={self.id}, entrada={self.entrada}, dificuldade={self.dificuldade})>"
-
 
 class Grupo(Base):
     __tablename__ = 'grupos'
     
     id = Column(SQLUUID(as_uuid=True), primary_key=True)
     nome = Column(String)
-    labirintos_concluidos = Column(String)  # Assuming labirintos_concluidos is stored as a comma-separated string
+    labirintos_concluidos = Column(String)
+    info_grupos = relationship("InfoGrupo", back_populates="grupo")
+    sessoes_websocket = relationship("SessaoWebSocket", back_populates="grupo")  
+
+class InfoGrupo(Base):
+    __tablename__ = 'info_grupos'
+
+    grupo_id = Column(SQLUUID(as_uuid=True), ForeignKey('grupos.id'), nullable = False)
+    labirinto_id = Column(Integer, ForeignKey('labirintos.id'), nullable = False)
+    passos = Column(Integer)
+    exploracao = Column(Float)
+
+    __table_args__ = (PrimaryKeyConstraint('grupo_id', 'labirinto_id', name='pk_info'),)
+
+    #Relacionamentos
+    grupo = relationship("Grupo", foreign_keys=[grupo_id], back_populates="info_grupos")
+    labirinto = relationship("Labirinto", foreign_keys=[labirinto_id], back_populates="info_grupos")
 
 
 class SessaoWebSocket(Base):
     __tablename__ = 'sessoes_websocket'
     
     id = Column(Integer, primary_key=True, unique=True, autoincrement=True)
-    grupo_id = Column(String, ForeignKey('grupos.id'))  # Use String type for UUID
+    grupo_id = Column(SQLUUID, ForeignKey('grupos.id'))  # Use String type for UUID
     conexao = Column(String)
 
+    grupo = relationship("Grupo", back_populates="sessoes_websocket")
 
 # Pydantic models
 class VerticeModel(BaseModel):
     id: int
-    labirintoId: int
-    adjacentes: List[int]
     tipo: int
 
+class ArestaModel(BaseModel):
+    origemId: int
+    destinoId: int
+    peso: int
 
 class LabirintoModel(BaseModel):
     vertices: List[VerticeModel]
-    entrada: int
+    arestas: List[ArestaModel]
     dificuldade: str  
-
 
 class GrupoModel(BaseModel):
     nome: str
     labirintos_concluidos : Optional[List[int]] = None
-
 
 # DTOs
 class VerticeDto(BaseModel):
     id: int
     adjacentes: List[int]
     tipo: int
-
 
 class LabirintoDto(BaseModel):
     LabirintoId: int
@@ -91,32 +126,24 @@ class LabirintoDto(BaseModel):
     Passos: int
     Exploracao: float
 
-
 class GrupoDto(BaseModel):
     id: UUID
     nome: str
     labirintos_concluidos: Optional[List[int]]
 
+class CriarGrupoDto(BaseModel):
+    nome: str
 
-# Create the database and tables
-engine = create_engine('sqlite:///./db.sqlite3', echo=True)
-Base.metadata.create_all(engine)
+class WebsocketRequestDto(BaseModel):
+    grupo_id: UUID
+    labirinto_id: int
 
-SessionLocal = sessionmaker(bind=engine)
+class RespostaDto(BaseModel):
+    labirinto: int
+    grupo: UUID
+    vertices: List[int]
 
-# Função para obter uma sessão de banco de dados
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-# Inicializando a aplicação FastAPI
-app = FastAPI()
-
-# Gerenciar conexões WebSocket ativas
+# Websocket manager
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -135,14 +162,156 @@ class ConnectionManager:
         for connection in self.active_connections:
             await connection.send_text(message)
 
-manager = ConnectionManager()
 
-import asyncio
+# Create the database and tables
+engine = create_engine('sqlite:///./db.sqlite3', echo=True)
+Base.metadata.create_all(engine)
+
+SessionLocal = sessionmaker(bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app = FastAPI()
+
+@app.post("/grupo")
+async def registrar_grupo(grupo: CriarGrupoDto):
+    db = next(get_db())
+    grupo_id = uuid.uuid4()
+    grupo_db = Grupo(id=grupo_id, nome=grupo.nome)
+    db.add(grupo_db)
+    for labirinto in db.query(Labirinto).all():
+        info_grupo = InfoGrupo(grupo_id=grupo_id, labirinto_id=labirinto.id, passos = 0, exploracao = 0)
+        db.add(info_grupo)
+    db.commit()
+    grupo_dto = GrupoDto(id=grupo_db.id, nome=grupo_db.nome, labirintos_concluidos=[])
+    return {"GrupoId": grupo_dto.id}
+
+@app.post("/labirinto")
+async def criar_labirinto(labirinto: LabirintoModel):
+    db = next(get_db())
+    labirinto_db = Labirinto(entrada=0, dificuldade=labirinto.dificuldade)
+    db.add(labirinto_db)
+    db.commit()
+    db.refresh(labirinto_db)
+
+    for vertice in labirinto.vertices:
+        vertice_db = Vertice(
+            id=vertice.id,
+            labirinto_id=labirinto_db.id,
+            tipo=vertice.tipo
+        )
+        db.add(vertice_db)
+    for aresta in labirinto.arestas:
+        aresta_db = Aresta(
+            vertice_origem_id=aresta.origemId,
+            labirinto_id=labirinto_db.id,
+            vertice_destino_id=aresta.destinoId,
+            peso=aresta.peso
+        )
+        db.add(aresta_db)
+
+    db.commit()
+    db.refresh(vertice_db)
+
+    return {"LabirintoId": labirinto_db.id}
+
+@app.get("/grupos")
+async def retorna_grupos():
+    db = next(get_db())
+    grupos = db.query(Grupo).all()
+    grupos_dto = [GrupoDto(id=grupo.id, nome=grupo.nome, labirintos_concluidos=[]) for grupo in grupos]
+    return {"Grupos": grupos_dto}
+
+@app.get("/iniciar/{grupo_id}")
+async def iniciar_desafio(grupo_id: UUID):
+    db = next(get_db())
+    grupo_db = db.query(Grupo).filter(Grupo.id == grupo_id).first()
+    if not grupo_db:
+        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+    pass
+
+@app.get("/labirintos/{grupo_id}")
+async def get_labirintos(grupo_id: UUID):
+    db = next(get_db())
+    # Consultar as informações relacionadas ao grupo
+    informacoesGrupo = db.query(InfoGrupo).filter(InfoGrupo.grupo_id == grupo_id).all()
+    # Verificar se o grupo foi encontrado
+    if not informacoesGrupo:
+        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+        # Criar os DTOs para cada labirinto associado ao grupo
+    informacoesGrupoDto = []
+    for info in informacoesGrupo:
+        labirinto = info.labirinto  # Acessa o objeto Labirinto relacionado
+        grupo = info.grupo  # Acessa o objeto Grupo relacionado
+        
+        # Criar o DTO para cada InfoGrupo
+        labirintoDto = LabirintoDto(
+            LabirintoId=labirinto.id,
+            Dificuldade=labirinto.dificuldade,
+            Completo=labirinto.id in grupo.labirintos_concluidos.split(',') if grupo.labirintos_concluidos else False,
+            Passos=info.passos,
+            Exploracao=info.exploracao
+        )
+        informacoesGrupoDto.append(labirintoDto)
+    # Retorna os DTOs
+    return {"labirintos": informacoesGrupoDto}
+
+## TODO
+## FAZER PLACAR
+@app.get("/placar")
+async def get_placar():
+    db = next(get_db())
+    dados = db.query(InfoGrupo).all()
+    placar = {}
+
+    for dado in dados:
+        grupo = dado.grupo.nome  # Nome do grupo
+        if grupo not in placar:
+            placar[grupo] = {
+                "grupo": grupo,
+                "labirintos": []
+            }
+        
+        # Adiciona o labirinto e suas estatísticas à lista de labirintos do grupo
+        placar[grupo]["labirintos"].append({
+            "labirinto": dado.labirinto_id,
+            "passos": dado.passos,
+            "exploracao": dado.exploracao
+        })
+
+    # Converte o dicionário em uma lista para retornar
+    return list(placar.values())
+
+
+@app.get("/sessoes")
+async def get_websocket_sessions():
+    db = next(get_db())  # Manually obtain database session
+    sessoes = db.query(SessaoWebSocket).all()
+    
+    result = []
+    for sessao in sessoes:
+        result.append({
+            "id": sessao.id,
+            "grupo_id": str(sessao.grupo_id),
+            "conexao": sessao.conexao,
+            "grupo_nome": sessao.grupo.nome if sessao.grupo else None
+        })
+    
+    return result
+
+
+manager = ConnectionManager()
 
 @app.websocket("/ws/{grupo_id}/{labirinto_id}")
 async def websocket_endpoint(websocket: WebSocket, grupo_id: UUID, labirinto_id: int):
-    await manager.connect(websocket)  # Aceita a conexão WebSocket
-    db = next(get_db())  # Obtém a conexão com o banco de dados
+    await manager.connect(websocket)
+    db = next(get_db())
+    step_count = 1
 
     try:
         # Obtém o labirinto e seu vértice de entrada
@@ -160,8 +329,11 @@ async def websocket_endpoint(websocket: WebSocket, grupo_id: UUID, labirinto_id:
             await manager.disconnect(websocket)
             return
 
-        # Envia o vértice de entrada para o cliente
-        await manager.send_message(f"Vértice atual: {vertice_atual.id}, Adjacentes: {vertice_atual.adjacentes.split(',')}", websocket)
+        arestas = db.query(Aresta).filter(Aresta.vertice_origem_id == vertice_atual.id).all()
+        adjacentes = [(a.vertice_destino_id, a.peso) for a in arestas]
+
+        # Envia o vértice de entrada e seus adjacentes para o cliente
+        await manager.send_message(f"Vértice atual: {vertice_atual.id}, Tipo: {vertice_atual.tipo}, Adjacentes(Vertice, Peso): {adjacentes}", websocket)
 
         # Loop para interações do cliente
         while True:
@@ -178,7 +350,7 @@ async def websocket_endpoint(websocket: WebSocket, grupo_id: UUID, labirinto_id:
                         continue
 
                     # Verifica se o vértice desejado está nos adjacentes do vértice atual
-                    adjacentes = list(map(int, vertice_atual.adjacentes.split(",")))
+                    adjacentes = [a[0] for a in db.query(Aresta.vertice_destino_id).filter(Aresta.vertice_origem_id == vertice_atual.id).all()]
                     if vertice_desejado_id not in adjacentes:
                         await manager.send_message("Vértice inválido.", websocket)
                         continue
@@ -189,9 +361,18 @@ async def websocket_endpoint(websocket: WebSocket, grupo_id: UUID, labirinto_id:
                     if not vertice_atual:
                         await manager.send_message("Erro ao acessar o vértice desejado.", websocket)
                         continue
+                    
+                    aresta = db.query(Aresta).filter(Aresta.vertice_origem_id == vertice_atual.id).all()
 
-                    # Envia as informações do novo vértice ao cliente
-                    await manager.send_message(f"Vértice atual: {vertice_atual.id}, Adjacentes: {vertice_atual.adjacentes.split(',')}", websocket)
+                    if not aresta:
+                        await manager.send_message("Vértice sem adjacentes.", websocket)
+                        continue
+
+                    arestas = db.query(Aresta).filter(Aresta.vertice_origem_id == vertice_atual.id).all()
+                    adjacentes = [(a.vertice_destino_id, a.peso) for a in arestas]
+                    step_count += 1
+                    # Envia o vértice de entrada e seus adjacentes para o cliente
+                    await manager.send_message(f"Vértice atual: {vertice_atual.id}, Tipo: {vertice_atual.tipo}, Adjacentes(Vertice, Peso): {adjacentes}", websocket)
                 else:
                     await manager.send_message("Comando não reconhecido. Use 'ir: id_do_vertice' para se mover.", websocket)
             
@@ -202,63 +383,78 @@ async def websocket_endpoint(websocket: WebSocket, grupo_id: UUID, labirinto_id:
                 break
 
     except WebSocketDisconnect:
+        grupo_info = db.query(InfoGrupo).filter(InfoGrupo.grupo_id == str(grupo_id), InfoGrupo.labirinto_id == labirinto_id).first()
+        if grupo_info:
+            grupo_info.passos = step_count
+            grupo_info.exploracao = step_count / len(db.query(Vertice).filter(Vertice.labirinto_id == labirinto_id).all())
+            db.add(grupo_info)
+            db.commit()
         manager.disconnect(websocket)
+        db.query(SessaoWebSocket).filter(SessaoWebSocket.conexao == websocket.url).delete()
         await manager.broadcast(f"Grupo {grupo_id} desconectado.")
 
-
-# Endpoints REST (mantidos como na versão anterior)
-@app.post("/grupo")
-async def registrar_grupo(grupo: GrupoModel):
-    db = next(get_db())
-    grupo_db = Grupo(id=uuid.uuid4(), nome=grupo.nome)
-    db.add(grupo_db)
-    db.commit()
-    grupo_dto = GrupoDto(id=grupo_db.id, nome=grupo_db.nome, labirintos_concluidos=[])
-    return {"GrupoId": grupo_dto.id}
-
-
-@app.post("/labirinto")
-async def criar_labirinto(labirinto: LabirintoModel):
-    db = next(get_db())
-    labirinto_db = Labirinto(entrada=labirinto.entrada, dificuldade=labirinto.dificuldade)
-    db.add(labirinto_db)
-    db.commit()
-    db.refresh(labirinto_db)  # Refresh to get the generated ID
-
-    for vertice in labirinto.vertices:
-        vertice_db = Vertice(
-            id=vertice.id,
-            labirinto_id=labirinto_db.id,
-            adjacentes=','.join(map(str, vertice.adjacentes)),  # Convert list to comma-separated string
-            tipo=vertice.tipo
-        )
-        db.add(vertice_db)
-    db.commit()
-    db.refresh(vertice_db)
-
-    return {"LabirintoId": labirinto_db.id}
-
-
 @app.post("/generate-websocket/")
-async def generate_websocket_link(grupo_id: UUID, labirinto_id: int):
+async def generate_websocket_link(connection: WebsocketRequestDto):
     db = next(get_db())
-    grupo = db.query(Grupo).filter(Grupo.id == grupo_id).first()
-    labirinto = db.query(Labirinto).filter(Labirinto.id == labirinto_id).first()
+    grupo = db.query(Grupo).filter(Grupo.id == connection.grupo_id).first()
+    labirinto = db.query(Labirinto).filter(Labirinto.id == connection.labirinto_id).first()
 
     if not grupo:
         raise HTTPException(status_code=404, detail="Grupo não encontrado")
     if not labirinto:
         raise HTTPException(status_code=404, detail="Labirinto não encontrado")
     
-    ws_url = f"ws://localhost:8000/ws/{grupo_id}/{labirinto_id}"
+    ws_url = f"ws://localhost:8000/ws/{connection.grupo_id}/{connection.labirinto_id}"
     
     # Salva a sessão no banco de dados
-    sessao_ws = SessaoWebSocket(grupo_id=str(grupo_id), conexao=ws_url)
+    sessao_ws = SessaoWebSocket(grupo_id=str(connection.grupo_id), conexao=ws_url)
     db.add(sessao_ws)
     db.commit()
     
     return {"websocket_url": ws_url}
 
+@app.post("/resposta")
+async def enviar_resposta(resposta: RespostaDto):
+    db = next(get_db())
+    grupo = db.query(Grupo).filter(Grupo.id == resposta.grupo).first()
+    if not grupo:
+        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+
+    labirinto = db.query(Labirinto).filter(Labirinto.id == resposta.labirinto).first()
+    if not labirinto:
+        raise HTTPException(status_code=404, detail="Labirinto não encontrado")
+
+    vertices = resposta.vertices
+
+    # Verifica se o labirinto foi concluído
+    if vertices[0] != labirinto.entrada or vertices[-1] != labirinto.saida:
+        raise HTTPException(status_code=400, detail="Labirinto não foi concluído")
+
+    # Check if each consecutive pair in vertices list has an edge connecting them
+    for i in range(len(vertices) - 1):
+        vertice_atual_id = vertices[i]
+        vertice_proximo_id = vertices[i + 1]
+
+        # Query the database to check if there is an edge between vertice_atual_id and vertice_proximo_id
+        aresta = db.query(Aresta).filter(
+            Aresta.vertice_origem_id == vertice_atual_id,
+            Aresta.vertice_destino_id == vertice_proximo_id,
+            Aresta.labirinto_id == labirinto.id
+        ).first()
+
+        # If no edge exists between consecutive vertices, return an error
+        if not aresta:
+            raise HTTPException(status_code=400, detail=f"Caminho inválido: vértices {vertice_atual_id} e {vertice_proximo_id} não estão conectados")
+
+    # Se chegou até aqui, o caminho é válido e o labirinto foi concluído com sucesso
+    # (Aqui você pode marcar o labirinto como concluído ou atualizar o progresso do grupo)
+    grupo.labirintos_concluidos = grupo.labirintos_concluidos + f",{labirinto.id}" if grupo.labirintos_concluidos else str(labirinto.id)
+    db.add(grupo)
+    db.commit()
+
+    return {"message": "Labirinto concluído com sucesso"}
+
+    
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,74 +1,54 @@
 import asyncio
+import json
 import websockets
-from heapq import heappush, heappop
-import sqlite3
+from algorithms import explore_maze, reconstruct_path
+from utils import get_group_id, get_labyrinths, get_websocket_url, send_solution
 
-# Conexão com o banco de dados SQLite para armazenar os resultados
-conn = sqlite3.connect('results.db')
-c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS paths (id INTEGER PRIMARY KEY, path TEXT, total_weight REAL)''')
-conn.commit()
+API_URL = "http://localhost:8000"
+GROUP_NAME = "O_Melhor"
 
-async def map_graph(websocket_url):
-    queue = []
-    visited = set()
-    paths = []  # Armazena todos os caminhos encontrados
+async def main():
+    # Obter ou criar o ID do grupo
+    group_id = await get_group_id(API_URL, GROUP_NAME)
+    print(f"Grupo ID: {group_id}")
 
-    # Conectar ao servidor WebSocket
+    # Obter a lista de labirintos disponíveis
+    labyrinths = await get_labyrinths(API_URL, group_id)
+    print(f"Labirintos disponíveis: {labyrinths}")
+
+    # Escolher um labirinto para explorar
+    labyrinth_id = labyrinths[0]['LabirintoId']  # Escolhe o primeiro labirinto
+    print(f"Iniciando exploração do labirinto {labyrinth_id}")
+
+    # Obter a URL do WebSocket para o labirinto escolhido
+    websocket_url = await get_websocket_url(API_URL, group_id, labyrinth_id)
+    print(f"Conectando ao WebSocket: {websocket_url}")
+
+    # Conectar ao WebSocket e iniciar a exploração
     async with websockets.connect(websocket_url) as websocket:
-        # Receber o vértice inicial
-        start_message = await websocket.recv()
-        start_data = parse_vertex_data(start_message)
-        
-        # Inicializar a travessia com o vértice inicial
-        heappush(queue, (0, start_data['vertex'], [start_data['vertex']]))
+        # Receber o vértice inicial e adjacentes
+        initial_message = await websocket.recv()
+        print(f"Mensagem inicial: {initial_message}")
 
-        while queue:
-            current_weight, current_vertex, current_path = heappop(queue)
+        current_vertex, adjacents, vertex_type = parse_vertex_message(initial_message)
+        visited, path, exit_vertex = await explore_maze(websocket, current_vertex)
+        print(f"Labirinto explorado. Vértices visitados: {visited}")
 
-            if current_vertex in visited:
-                continue
-            visited.add(current_vertex)
+        # Reconstruir o melhor caminho até uma saída
+        best_path = reconstruct_path(path, exit_vertex)
+        print(f"Melhor caminho encontrado: {best_path}")
 
-            # Solicitar a lista de adjacências do vértice atual
-            await websocket.send(str(current_vertex))
-            response = await websocket.recv()
-            adjacents = parse_adjacency_data(response)
+        # Enviar a solução para a API
+        response = await send_solution(API_URL, labyrinth_id, group_id, best_path)
+        print(f"Solução enviada com sucesso: {response}")
 
-            for neighbor, weight in adjacents:
-                if neighbor not in visited:
-                    total_weight = current_weight + weight
-                    new_path = current_path + [neighbor]
-                    heappush(queue, (total_weight, neighbor, new_path))
+def parse_vertex_message(message):
+    # Analisar a mensagem JSON recebida
+    data = json.loads(message)
+    current_vertex = data['Id']
+    adjacents = data['Adjacencia']
+    vertex_type = data['Tipo']
+    return current_vertex, adjacents, vertex_type
 
-                    # Armazenar cada caminho encontrado
-                    paths.append((new_path, total_weight))
-
-        # Salvar todos os caminhos encontrados no banco de dados
-        for path, weight in paths:
-            c.execute('INSERT INTO paths (path, total_weight) VALUES (?, ?)', (str(path), weight))
-        conn.commit()
-
-def parse_vertex_data(message):
-    # Analisar a mensagem inicial para extrair o ID do vértice
-    return {'vertex': int(message.split(":")[-1].strip())}
-
-def parse_adjacency_data(message):
-    # Analisar os dados de adjacência do servidor WebSocket
-    return eval(message.split(":")[-1].strip())
-
-def show_results():
-    # Função para exibir os resultados armazenados no banco de dados
-    c.execute('SELECT * FROM paths')
-    rows = c.fetchall()
-    for row in rows:
-        print(f"Caminho: {row[1]}, Peso Total: {row[2]}")
-
-# Exemplo de uso
 if __name__ == "__main__":
-    websocket_url = "ws://localhost:8000/ws/{grupo_id}/{labirinto_id}"  # URL do WebSocket
-    asyncio.run(map_graph(websocket_url))
-    show_results()
-
-# Fechar a conexão com o banco de dados ao finalizar
-conn.close()
+    asyncio.run(main())
