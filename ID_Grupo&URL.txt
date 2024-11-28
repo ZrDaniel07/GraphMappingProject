@@ -1,7 +1,0 @@
-curl -X POST "http://127.0.0.1:8000/grupo" -H "Content-Type: application/json" -d "{\"nome\": \"O_Melhor\"}"
-{"GrupoId":"c29028e6-225a-4d2d-9084-7970f6230d5d"}
-
-
-"GrupoId": "d731905b-b9aa-4b5f-aa90-101316674829"
-
-//localhost:8000/ws/d731905b-b9aa-4b5f-aa90-101316674829/1

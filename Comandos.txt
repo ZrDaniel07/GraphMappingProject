@@ -1,0 +1,32 @@
+Comandos
+
+Comandos para rodar a API
+	venv\Scripts\activate
+	cd api
+	python main.py
+
+Comandos para criar labirintos
+	venv\Scripts\activate
+	cd labirintos
+	python criarJsonLabirintos.py
+
+
+
+Listar labirintos:
+	curl "http://localhost:8000/labirintos"
+
+
+Adiciona o labirinto ao Websocket
+	curl -X POST "http://localhost:8000/labirinto" -H "Content-Type: application/json" --data-binary "@3_labirinto.json"
+
+Labirinto ID:
+
+Adiciona o Grupo ao Web Socket:
+	curl -X POST "http://localhost:8000/grupo" -H "Content-Type: application/json" -d '{"nome": "O_Melhor"}'
+
+Grupo ID:
+	"e91561cc-44ff-40e6-9f27-7843bf2fc9ed"
+
+
+Gera a sessão de busca (ID de Grupo + ID Labirinto):
+	curl -X POST "http://localhost:8000/generate-websocket" -H "Content-Type: application/json" -d '{"grupo_id": "<6ec1b5b7-0ca0-4f47-b867-360f713c5a24>", "labirinto_id": <3>}'
